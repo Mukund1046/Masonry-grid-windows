@@ -4,7 +4,7 @@ An infinite pannable masonry grid for your Twitter bookmarks. Browse your bookma
 
 Feel free to remix this into a webapp, browser extension or whatever suits your needs!
 
-<video src="assets/example-video.mp4" autoplay loop muted playsinline></video>
+<video src="https://s3.us-east-1.amazonaws.com/danield.design/assets/twitter-bookmarks-grid/example-video.mp4" autoplay loop muted playsinline></video>
 
 ![Lightbox view](assets/example-2.png)
 

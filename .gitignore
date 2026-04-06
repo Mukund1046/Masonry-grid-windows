@@ -1,0 +1,8 @@
+node_modules/
+bookmarks-data.json
+folders-data.json
+.env
+.env.local
+.DS_Store
+.claude/
+lucas-centered-animation/

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bookmarks</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="viewport">
+    <div id="container">
+      <div id="grid"></div>
+    </div>
+  </div>
+  <div id="lightbox-overlay" class="lightbox-overlay">
+    <button id="lightbox-close" class="lightbox-close" aria-label="Close">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+      </svg>
+    </button>
+    <div id="lightbox-info" class="lightbox-info">
+      <h2 id="lightbox-title" class="lightbox-title">Bookmark Title</h2>
+      <a id="lightbox-link" class="lightbox-link" href="#" target="_blank" rel="noopener">View original</a>
+    </div>
+  </div>
+  <script src="node_modules/motion/dist/motion.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

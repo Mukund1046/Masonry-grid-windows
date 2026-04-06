@@ -1,6 +1,6 @@
 # twitter-bookmarks-grid
 
-An infinite pannable masonry grid for your Twitter bookmarks. Browse your bookmarks visually or by folder. Based on [@afar1](https://github.com/afar1)'s great [fieldtheory-cli](https://github.com/afar1/fieldtheory-cli) repo.
+An infinite pannable masonry grid for your Twitter bookmarks. Browse your bookmarks visually or by folder. Based on [@afar1](https://github.com/afar1)'s great [fieldtheory-cli](https://github.com/afar1/fieldtheory-cli) repo. Lightbox animation logic inspired by [@lucasvocos](https://github.com/lucasvocos).
 
 Feel free to remix this into a webapp, browser extension or whatever suits your needs!
 

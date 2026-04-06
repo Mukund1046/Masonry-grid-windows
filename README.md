@@ -38,6 +38,19 @@ Open http://localhost:3000
 - Lightbox clones the clicked element, animates it to center with [Motion One](https://motion.dev/) springs, and loads a high-res image on top.
 - Folder sync uses Twitter's internal GraphQL endpoints via Chrome session cookies (same approach as fieldtheory-cli).
 
+## Folder sync
+
+`sync-folders.js` fetches your Twitter bookmark folders so you can filter the grid by folder. It uses Twitter's internal GraphQL API (`BookmarkFoldersSlice` and `BookmarkFolderTimeline`) authenticated via your Chrome session cookies — no API keys needed.
+
+Run `node sync-folders.js` and it will:
+1. List all your bookmark folders
+2. Fetch the bookmarks in each folder (paginated, ~20 per page)
+3. Output `folders-data.json` mapping tweet IDs to folder names
+
+Then re-run `node export-bookmarks.js` to merge the folder data into the grid. A dropdown pill in the top-right lets you filter by folder.
+
+Note: Twitter's GraphQL query IDs can change when they update their web app. If the sync fails, you may need to update the query IDs in `sync-folders.js` by inspecting the network tab on x.com/i/bookmarks.
+
 ## Excluding bookmarks
 
 Add tweet IDs to `EXCLUDED_IDS` in `export-bookmarks.js` and re-export.

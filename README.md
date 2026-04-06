@@ -1,25 +1,28 @@
 # twitter-bookmarks-grid
 
-Infinite pannable masonry grid for your Twitter/X bookmarks. Virtualized rendering, folder filtering, lightbox with spring animations.
+An infinite pannable masonry grid for your Twitter bookmarks. Browse your bookmarks visually or by folder. Based on [@afar1](https://github.com/afar1)'s great [fieldtheory-cli](https://github.com/afar1/fieldtheory-cli) repo.
+
+Feel free to remix this into a webapp, browser extension or whatever suits your needs!
 
 ## Setup
 
 Requires Node.js 20+ and Chrome logged into x.com.
 
 ```bash
-npm install
+# Install fieldtheory-cli and sync your bookmarks
 npm install -g fieldtheory
-
-# Sync bookmarks from Chrome session
 ft sync
 
-# Sync folder data (optional)
+# Install dependencies
+npm install
+
+# Sync your bookmark folders (optional)
 node sync-folders.js
 
-# Export to JSON
+# Export bookmarks to JSON for the grid
 node export-bookmarks.js
 
-# Run
+# Start browsing
 node server.js
 ```
 
@@ -28,9 +31,8 @@ Open http://localhost:3000
 ## How it works
 
 - Masonry positions are computed as pure data, then a fixed pool of ~400 DOM elements is recycled as you pan. Tested with 1,300+ bookmarks.
-- The grid tiles infinitely in all directions via modular arithmetic.
 - Lightbox clones the clicked element, animates it to center with [Motion One](https://motion.dev/) springs, and loads a high-res image on top.
-- Folder sync uses Twitter's internal GraphQL endpoints via Chrome session cookies (same approach as [fieldtheory-cli](https://github.com/afar1/fieldtheory-cli)).
+- Folder sync uses Twitter's internal GraphQL endpoints via Chrome session cookies (same approach as fieldtheory-cli).
 
 ## Excluding bookmarks
 

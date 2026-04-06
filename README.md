@@ -4,6 +4,9 @@ An infinite pannable masonry grid for your Twitter bookmarks. Browse your bookma
 
 Feel free to remix this into a webapp, browser extension or whatever suits your needs!
 
+![Grid view](assets/example.png)
+![Lightbox view](assets/example-2.png)
+
 ## Setup
 
 Requires Node.js 20+ and Chrome logged into x.com.

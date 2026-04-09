@@ -16,6 +16,9 @@ This fork is set up to work cleanly on Windows:
 - No browser profile cookie extraction in this repo
 - Folder sync uses explicit `ct0` and `auth_token` cookies from Firefox/X
 - Export paths are configurable and safe on Windows
+- Three viewer modes: `Media`, `Cards`, and depth-based `Canvas`
+- Card view includes tweet text, engagement counts, and posted/saved/synced timeline metadata
+- Canvas view supports free drag in `x/y` and forward/back depth travel on the `z` axis
 
 The fetch/sync/export layer is Windows-friendly. The grid UI and browsing behavior are unchanged.
 
@@ -181,12 +184,53 @@ Then open:
 http://localhost:3000
 ```
 
+## Viewer modes
+
+The app now has three modes in the top-left toggle:
+
+### Media
+
+- Original image-first masonry view
+- Best for fast visual scanning
+- Click an item to open the lightbox
+
+### Cards
+
+- Compact mixed-content view
+- Shows image thumbnail when available
+- Shows author, handle, tweet text, engagement counts, and timeline info
+- Useful when you want to read bookmarks instead of just scanning images
+
+### Canvas
+
+- Image-only depth-based mode inspired by the local `infinite-canvas` reference
+- Items are distributed across `x`, `y`, and `z`
+- Drag pans horizontally and vertically
+- Mouse wheel moves forward/backward through depth
+- `W` / `S` or `ArrowUp` / `ArrowDown` also move through depth
+
+## Timeline metadata
+
+The exported bookmark data now includes:
+
+- `postedAt`
+- `bookmarkedAt`
+- `syncedAt`
+
+The UI uses them like this:
+
+- show `Posted <date>` when available
+- show `Saved <date>` if `bookmarkedAt` exists
+- otherwise show `Synced <date>` as fallback
+
+This is especially useful because many current Field Theory exports do not contain a reliable bookmark-save timestamp for every item.
+
 ## Files used by the workflow
 
 - `sync-folders.js`
   Uses your `X_CT0` and `X_AUTH_TOKEN` to fetch X bookmark folders
 - `export-bookmarks.js`
-  Reads bookmark JSONL and creates the UI-ready export
+  Reads bookmark JSONL, preserves timeline fields, and creates the UI-ready export
 - `config.js`
   Shared `.env` and path resolution logic
 - `.env`
@@ -269,7 +313,9 @@ You can safely commit:
 - Masonry positions are computed as data and a fixed DOM pool is recycled while you pan
 - Lightbox animation uses Motion One springs
 - Folder sync uses X internal GraphQL endpoints, not the public API
-- The UI stays static and simple; the work happens in the sync/export layer
+- `Cards` mode uses compact metadata-rich bookmark cards
+- `Canvas` mode approximates an infinite depth canvas in the DOM with projected image tiles and `z`-axis navigation
+- The app uses lightweight virtualization and lower rendering budgets on weaker devices
 
 ## Caveat
 

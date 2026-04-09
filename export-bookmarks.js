@@ -68,6 +68,8 @@ function main() {
         authorName: raw.authorName || "",
         authorAvatar: raw.authorProfileImageUrl || "",
         postedAt: raw.postedAt || "",
+        bookmarkedAt: raw.bookmarkedAt || "",
+        syncedAt: raw.syncedAt || "",
         images,
         mediaCount: (raw.media || []).length,
         likeCount: raw.engagement?.likeCount ?? 0,

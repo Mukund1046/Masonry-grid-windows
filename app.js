@@ -1,20 +1,35 @@
 // Bookmarks data — loaded from bookmarks-data.json
 let ALL_BOOKMARKS = [];
 let FOLDERS = [];
-let BOOKMARKS_WITH_IMAGES = [];
 let activeFolder = "All";
+let activeView = "media";
+let DISPLAY_BOOKMARKS = [];
+
+const isLowSpecDevice = () => {
+  const memory = navigator.deviceMemory || 8;
+  const cores = navigator.hardwareConcurrency || 8;
+  return memory <= 4 || cores <= 4 || window.innerWidth < 900;
+};
 
 const CONFIG = {
-  COLS: 5,
+  MEDIA_COLS: 5,
+  CARD_COLS: 4,
+  CANVAS_COLS: 5,
   GAP: 18,
   easingFactor: 0.1,
-  POOL_SIZE: 500,
-  BUFFER: 600, // px buffer outside viewport to pre-render
+  POOL_SIZE: isLowSpecDevice() ? 260 : 420,
+  BUFFER: isLowSpecDevice() ? 320 : 600, // px buffer outside viewport to pre-render
+  CANVAS_STEP: 700,
+  CANVAS_FOCAL: 1100,
+  CANVAS_NEAR: 140,
+  CANVAS_FAR: isLowSpecDevice() ? 3200 : 5200,
+  CANVAS_DEPTH_SPACING: 720,
+  CANVAS_LAYER_ROWS: 3,
 };
 
 const state = {
-  cameraOffset: { x: 0, y: 0 },
-  targetOffset: { x: 0, y: 0 },
+  cameraOffset: { x: 0, y: 0, z: 0 },
+  targetOffset: { x: 0, y: 0, z: 0 },
   isDragging: false,
   previousMousePosition: { x: 0, y: 0 },
   dragStartPosition: { x: 0, y: 0 },
@@ -32,33 +47,196 @@ const overlay = document.getElementById("lightbox-overlay");
 const lightboxClose = document.getElementById("lightbox-close");
 const lightboxTitle = document.getElementById("lightbox-title");
 const lightboxLink = document.getElementById("lightbox-link");
+const lightboxMeta = document.getElementById("lightbox-meta");
 
 // --- Masonry layout data (pure data, no DOM) ---
 let layoutItems = []; // flat array: { key, bookmark, x, y, w, h }
 let colWidth = 0;
 let totalWidth = 0;
 let maxColHeight = 0;
+let canvasDepthPeriod = CONFIG.CANVAS_DEPTH_SPACING;
+
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const parseDate = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const formatDate = (value) => {
+  const date = parseDate(value);
+  if (!date) return null;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+};
+
+const escapeHtml = (value = "") =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const lineClampText = (value = "", maxLength = 180) => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trimEnd()}…`;
+};
+
+const formatCount = (value = 0) => {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, "")}K`;
+  return `${value}`;
+};
+
+const getTimelineEntries = (bookmark) => {
+  const posted = formatDate(bookmark.postedAt);
+  const saved = formatDate(bookmark.bookmarkedAt);
+  const synced = formatDate(bookmark.syncedAt);
+
+  const entries = [];
+  if (posted) entries.push({ label: "Posted", value: posted });
+  if (saved) entries.push({ label: "Saved", value: saved });
+  else if (synced) entries.push({ label: "Synced", value: synced });
+  return entries;
+};
+
+const getTimelineText = (bookmark) =>
+  getTimelineEntries(bookmark)
+    .map((entry) => `${entry.label} ${entry.value}`)
+    .join("  •  ");
+
+const estimateCardHeight = (bookmark, itemWidth) => {
+  const hasImage = bookmark.images && bookmark.images.length > 0;
+  const imageHeight = hasImage
+    ? clamp(itemWidth / (bookmark.images[0].width / bookmark.images[0].height), 140, 240)
+    : 0;
+  const text = lineClampText(bookmark.text || "", 150);
+  const charsPerLine = Math.max(24, Math.floor(itemWidth / 8.8));
+  const textLines = clamp(Math.ceil(text.length / charsPerLine), 2, 5);
+  const textHeight = textLines * 18;
+  const timelineRows = getTimelineEntries(bookmark).length > 0 ? 1 : 0;
+  const timelineHeight = timelineRows * 22;
+  return imageHeight + textHeight + timelineHeight + 92;
+};
+
+const getFilteredBookmarks = () => {
+  const folderFiltered =
+    activeFolder === "All"
+      ? ALL_BOOKMARKS
+      : ALL_BOOKMARKS.filter(
+          (bookmark) =>
+            bookmark.folders && bookmark.folders.includes(activeFolder)
+        );
+
+  if (activeView === "media" || activeView === "canvas") {
+    return folderFiltered.filter(
+      (bookmark) => bookmark.images && bookmark.images.length > 0
+    );
+  }
+
+  return folderFiltered;
+};
+
+const setDisplayBookmarks = () => {
+  DISPLAY_BOOKMARKS = getFilteredBookmarks();
+};
+
+const getColumnsCount = () => {
+  if (activeView === "media") return CONFIG.MEDIA_COLS;
+  if (activeView === "canvas") return CONFIG.CANVAS_COLS;
+  return CONFIG.CARD_COLS;
+};
+
+const buildCanvasLayout = () => {
+  const gap = CONFIG.GAP;
+  const columnsCount = CONFIG.CANVAS_COLS;
+  const rowsPerLayer = CONFIG.CANVAS_LAYER_ROWS;
+  const itemW = Math.max(180, Math.floor(window.innerWidth * 0.18));
+  const itemH = Math.round(itemW * 0.72);
+  const xSpacing = Math.max(itemW * 1.9, 360);
+  const ySpacing = Math.max(itemH * 1.9, 290);
+  const itemsPerLayer = columnsCount * rowsPerLayer;
+  const worldWidth = xSpacing * (columnsCount + 1.5);
+  const worldHeight = ySpacing * (rowsPerLayer + 1.2);
+  const totalLayers = Math.max(1, Math.ceil(DISPLAY_BOOKMARKS.length / itemsPerLayer));
+
+  layoutItems = DISPLAY_BOOKMARKS.map((bookmark, index) => {
+    const layerIndex = Math.floor(index / itemsPerLayer);
+    const slot = index % itemsPerLayer;
+    const col = slot % columnsCount;
+    const row = Math.floor(slot / columnsCount);
+    const jitterX = ((index * 37) % 17 - 8) * 36;
+    const jitterY = ((index * 29) % 15 - 7) * 28;
+    const depthJitter = ((index * 17) % 9 - 4) * 48;
+    const scaleJitter = ((index * 19) % 5 - 2) * 18;
+
+    return {
+      key: `canvas-${index}`,
+      bookmark,
+      x: (col - (columnsCount - 1) / 2) * xSpacing + jitterX,
+      y: (row - (rowsPerLayer - 1) / 2) * ySpacing + jitterY,
+      z: layerIndex * CONFIG.CANVAS_DEPTH_SPACING + depthJitter,
+      w: itemW + scaleJitter,
+      h: Math.round((itemH + scaleJitter * 0.72)),
+    };
+  });
+
+  colWidth = worldWidth;
+  totalWidth = worldWidth;
+  maxColHeight = worldHeight;
+  canvasDepthPeriod = totalLayers * CONFIG.CANVAS_DEPTH_SPACING;
+};
 
 const buildMasonryLayout = () => {
+  if (activeView === "canvas") {
+    buildCanvasLayout();
+    return;
+  }
+
   const vw = window.innerWidth;
   const gap = CONFIG.GAP;
+  const columnsCount = getColumnsCount();
 
-  colWidth = Math.floor((vw - gap) / CONFIG.COLS);
-  totalWidth = colWidth * CONFIG.COLS;
+  colWidth = Math.floor((vw - gap) / columnsCount);
+  totalWidth = colWidth * columnsCount;
 
-  const colHeights = new Array(CONFIG.COLS).fill(0);
-  const columns = Array.from({ length: CONFIG.COLS }, () => []);
+  const colHeights = new Array(columnsCount).fill(0);
+  const columns = Array.from({ length: columnsCount }, () => []);
 
-  for (const bm of BOOKMARKS_WITH_IMAGES) {
+  if (DISPLAY_BOOKMARKS.length === 0) {
+    layoutItems = [];
+    maxColHeight = window.innerHeight;
+    return;
+  }
+
+  for (const bm of DISPLAY_BOOKMARKS) {
     let minCol = 0;
-    for (let c = 1; c < CONFIG.COLS; c++) {
+    for (let c = 1; c < columnsCount; c++) {
       if (colHeights[c] < colHeights[minCol]) minCol = c;
     }
 
-    const img = bm.images[0];
-    const aspect = img.width / img.height;
     const itemW = colWidth - gap;
-    const itemH = itemW / aspect;
+    let itemH = itemW;
+
+    if (activeView === "media") {
+      const img = bm.images[0];
+      const aspect = img.width / img.height;
+      itemH = itemW / aspect;
+    } else if (activeView === "canvas") {
+      const img = bm.images[0];
+      const aspect = img.width / img.height;
+      const baseHeight = clamp(itemW / aspect, 180, 360);
+      const depthOffset = ((minCol + columns[minCol].length) % 3) * 28;
+      itemH = baseHeight + depthOffset;
+    } else {
+      itemH = estimateCardHeight(bm, itemW);
+    }
 
     const x = minCol * colWidth + gap / 2;
     const y = colHeights[minCol] + gap / 2;
@@ -71,7 +249,7 @@ const buildMasonryLayout = () => {
 
   // Flatten into a single array with stable keys
   layoutItems = [];
-  for (let col = 0; col < CONFIG.COLS; col++) {
+  for (let col = 0; col < columnsCount; col++) {
     for (let row = 0; row < columns[col].length; row++) {
       const item = columns[col][row];
       layoutItems.push({
@@ -98,7 +276,20 @@ const createPool = () => {
     const el = document.createElement("div");
     el.className = "grid-item";
     el.style.display = "none";
-    el.innerHTML = `<img src="" alt="" loading="lazy" decoding="async">`;
+    el.innerHTML = `
+      <div class="grid-item-media">
+        <img src="" alt="" loading="lazy" decoding="async">
+      </div>
+      <div class="grid-item-body">
+        <div class="grid-item-head">
+          <div class="grid-item-author"></div>
+          <a class="grid-item-handle" href="#" target="_blank" rel="noopener"></a>
+        </div>
+        <p class="grid-item-text"></p>
+        <div class="grid-item-timeline"></div>
+        <div class="grid-item-stats"></div>
+      </div>
+    `;
     grid.appendChild(el);
     pool.push(el);
     freePool.push(el);
@@ -128,12 +319,82 @@ const twitterImageUrl = (url, size = "small") => {
   return `${base}?format=${format}&name=${size}`;
 };
 
+const renderCardContent = (el, bookmark, item) => {
+  const mediaWrap = el.querySelector(".grid-item-media");
+  const body = el.querySelector(".grid-item-body");
+  const author = el.querySelector(".grid-item-author");
+  const handle = el.querySelector(".grid-item-handle");
+  const text = el.querySelector(".grid-item-text");
+  const timeline = el.querySelector(".grid-item-timeline");
+  const stats = el.querySelector(".grid-item-stats");
+  const img = el.querySelector("img");
+  const hasImage = bookmark.images && bookmark.images.length > 0;
+
+  el.classList.toggle("grid-item-card", activeView === "card");
+  el.classList.toggle("grid-item-canvas", activeView === "canvas");
+  el.classList.toggle("grid-item-card-text-only", activeView === "card" && !hasImage);
+  mediaWrap.style.display = hasImage ? "" : "none";
+  body.style.display = activeView === "card" ? "" : "none";
+
+  if (hasImage) {
+    const imageHeight =
+      activeView === "card"
+        ? clamp(
+            item.w / (bookmark.images[0].width / bookmark.images[0].height),
+            170,
+            320
+          )
+        : item.h;
+    mediaWrap.style.height = `${imageHeight}px`;
+
+    const src = twitterImageUrl(
+      bookmark.images[0].url,
+      activeView === "card" ? "large" : "medium"
+    );
+    if (img.src !== src) {
+      img.src = src;
+      img.alt = bookmark.text.substring(0, 80);
+    }
+  } else {
+    img.removeAttribute("src");
+    img.alt = "";
+  }
+
+  if (activeView === "card") {
+    author.textContent = bookmark.authorName || `@${bookmark.authorHandle}`;
+    handle.textContent = `@${bookmark.authorHandle}`;
+    handle.href = bookmark.url;
+    text.textContent = lineClampText(bookmark.text || "", hasImage ? 150 : 220);
+    timeline.textContent = getTimelineText(bookmark);
+    timeline.style.display = timeline.textContent ? "" : "none";
+    stats.innerHTML = `
+      <span>Likes ${formatCount(bookmark.likeCount)}</span>
+      <span>Reposts ${formatCount(bookmark.repostCount)}</span>
+      <span>Bookmarks ${formatCount(bookmark.bookmarkCount)}</span>
+    `;
+  }
+};
+
+const resetViewportAndRebuild = () => {
+  state.cameraOffset.x = 0;
+  state.cameraOffset.y = 0;
+  state.cameraOffset.z = 0;
+  state.targetOffset.x = 0;
+  state.targetOffset.y = 0;
+  state.targetOffset.z = 0;
+
+  for (const [visKey, entry] of activeMap) {
+    releaseElement(entry.poolEl);
+    activeMap.delete(visKey);
+  }
+
+  buildMasonryLayout();
+  renderVisibleItems();
+};
+
 // --- Virtualized Renderer ---
 
-// Wraps a value into [0, period) range
-const wrap = (value, period) => ((value % period) + period) % period;
-
-const renderVisibleItems = () => {
+const renderFlatVisibleItems = () => {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const buf = CONFIG.BUFFER;
@@ -204,16 +465,10 @@ const renderVisibleItems = () => {
           const el = acquireElement();
           if (!el) continue;
 
-          const img = el.querySelector("img");
-          const src = twitterImageUrl(item.bookmark.images[0].url, "medium");
-          if (img.src !== src) {
-            img.src = src;
-            img.alt = item.bookmark.text.substring(0, 60);
-          }
-
           el.style.width = `${item.w}px`;
           el.style.height = `${item.h}px`;
           el.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+          renderCardContent(el, item.bookmark, item);
 
           elToBookmark.set(el, item.bookmark);
           activeMap.set(visKey, {
@@ -236,6 +491,96 @@ const renderVisibleItems = () => {
       activeMap.delete(visKey);
     }
   }
+};
+
+const renderCanvasVisibleItems = () => {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const centerX = vw / 2;
+  const centerY = vh / 2;
+  const lightboxEl = state.lightboxItem?.element || null;
+  const visibleThisFrame = new Set();
+  const tileRange =
+    canvasDepthPeriod > 0
+      ? Math.max(1, Math.ceil((CONFIG.CANVAS_FAR - CONFIG.CANVAS_NEAR) / canvasDepthPeriod) + 1)
+      : 1;
+
+  for (let i = 0; i < layoutItems.length; i++) {
+    const item = layoutItems[i];
+
+    for (let tz = -tileRange; tz <= tileRange; tz++) {
+      const worldZ = item.z + tz * canvasDepthPeriod;
+      const relativeZ = worldZ - state.cameraOffset.z;
+
+      if (relativeZ < CONFIG.CANVAS_NEAR || relativeZ > CONFIG.CANVAS_FAR) {
+        continue;
+      }
+
+      const scale = CONFIG.CANVAS_FOCAL / relativeZ;
+      const projectedW = item.w * scale;
+      const projectedH = item.h * scale;
+      const sx = centerX + (item.x - state.cameraOffset.x) * scale - projectedW / 2;
+      const sy = centerY + (item.y - state.cameraOffset.y) * scale - projectedH / 2;
+
+      if (
+        sx + projectedW < -CONFIG.BUFFER ||
+        sx > vw + CONFIG.BUFFER ||
+        sy + projectedH < -CONFIG.BUFFER ||
+        sy > vh + CONFIG.BUFFER
+      ) {
+        continue;
+      }
+
+      const visKey = `${item.key}_${tz}`;
+      visibleThisFrame.add(visKey);
+      const existing = activeMap.get(visKey);
+
+      if (existing) {
+        if (existing.poolEl !== lightboxEl) {
+          existing.poolEl.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+          existing.poolEl.style.width = `${projectedW}px`;
+          existing.poolEl.style.height = `${projectedH}px`;
+          existing.poolEl.style.zIndex = `${Math.round(10000 - relativeZ)}`;
+        }
+        existing.screenX = sx;
+        existing.screenY = sy;
+      } else {
+        const el = acquireElement();
+        if (!el) continue;
+
+        el.style.width = `${projectedW}px`;
+        el.style.height = `${projectedH}px`;
+        el.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+        el.style.zIndex = `${Math.round(10000 - relativeZ)}`;
+        renderCardContent(el, item.bookmark, { ...item, h: projectedH, w: projectedW });
+
+        elToBookmark.set(el, item.bookmark);
+        activeMap.set(visKey, {
+          poolEl: el,
+          layoutItem: item,
+          screenX: sx,
+          screenY: sy,
+        });
+      }
+    }
+  }
+
+  for (const [visKey, entry] of activeMap) {
+    if (!visibleThisFrame.has(visKey) && entry.poolEl !== lightboxEl) {
+      releaseElement(entry.poolEl);
+      elToBookmark.delete(entry.poolEl);
+      activeMap.delete(visKey);
+    }
+  }
+};
+
+const renderVisibleItems = () => {
+  if (activeView === "canvas") {
+    renderCanvasVisibleItems();
+    return;
+  }
+
+  renderFlatVisibleItems();
 };
 
 // --- Lightbox ---
@@ -268,6 +613,10 @@ let lightboxClone = null;
 
 const openLightbox = (el, bookmark) => {
   if (state.lightboxOpen || state.lightboxAnimating) return;
+  if (!bookmark.images || bookmark.images.length === 0) {
+    window.open(bookmark.url, "_blank");
+    return;
+  }
 
   state.lightboxAnimating = true;
   state.lightboxOpen = true;
@@ -301,11 +650,16 @@ const openLightbox = (el, bookmark) => {
   el.style.visibility = "hidden";
 
   lightboxClone = el.cloneNode(true);
+  const clonedBody = lightboxClone.querySelector(".grid-item-body");
+  if (clonedBody) clonedBody.remove();
+  const clonedMedia = lightboxClone.querySelector(".grid-item-media");
+  if (clonedMedia) clonedMedia.style.height = "100%";
   lightboxClone.classList.add("lightbox-active");
   lightboxClone.style.width = `${startW}px`;
   lightboxClone.style.height = `${startH}px`;
   lightboxClone.style.display = "";
   lightboxClone.style.visibility = "visible";
+  lightboxClone.style.zIndex = "40001";
   lightboxClone.style.transform = `translate3d(${startX}px, ${startY}px, 0)`;
   // Layer high-res image on top that fades in when loaded
   if (bookmark) {
@@ -340,6 +694,7 @@ const openLightbox = (el, bookmark) => {
         : bookmark.text;
     lightboxLink.href = bookmark.url;
     lightboxLink.textContent = `@${bookmark.authorHandle}`;
+    lightboxMeta.textContent = getTimelineText(bookmark);
   }
 
   // Position info just below the media
@@ -503,18 +858,24 @@ const onTouchEnd = () => {
 const onWheel = (e) => {
   e.preventDefault();
   if (state.lightboxOpen) return;
+  if (activeView === "canvas") {
+    state.targetOffset.z += e.deltaY * 0.9;
+    return;
+  }
   state.targetOffset.x += e.deltaX;
   state.targetOffset.y += e.deltaY;
 };
 
 const onWindowResize = () => {
-  buildMasonryLayout();
-  // Return all active elements to pool
-  for (const [visKey, entry] of activeMap) {
-    releaseElement(entry.poolEl);
-    activeMap.delete(visKey);
-  }
-  renderVisibleItems();
+  CONFIG.POOL_SIZE = isLowSpecDevice() ? 260 : 420;
+  CONFIG.BUFFER = isLowSpecDevice() ? 320 : 600;
+  CONFIG.CANVAS_STEP = Math.max(620, Math.round(window.innerHeight * 0.9));
+  CONFIG.MEDIA_COLS = window.innerWidth < 720 ? 2 : window.innerWidth < 1100 ? 3 : 5;
+  CONFIG.CARD_COLS = window.innerWidth < 720 ? 1 : window.innerWidth < 1200 ? 3 : 4;
+  CONFIG.CANVAS_COLS = window.innerWidth < 720 ? 3 : window.innerWidth < 1200 ? 4 : 5;
+  setDisplayBookmarks();
+  createPool();
+  resetViewportAndRebuild();
 };
 
 // --- Animation Loop ---
@@ -524,10 +885,12 @@ const animate = () => {
 
   const dx = state.targetOffset.x - state.cameraOffset.x;
   const dy = state.targetOffset.y - state.cameraOffset.y;
+  const dz = state.targetOffset.z - state.cameraOffset.z;
 
-  if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+  if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01 || Math.abs(dz) > 0.01) {
     state.cameraOffset.x += dx * CONFIG.easingFactor;
     state.cameraOffset.y += dy * CONFIG.easingFactor;
+    state.cameraOffset.z += dz * CONFIG.easingFactor;
     renderVisibleItems();
   }
 };
@@ -550,26 +913,8 @@ const applyFilter = (folder) => {
 
   setTimeout(() => {
     // Swap content while invisible
-    if (folder === "All") {
-      BOOKMARKS_WITH_IMAGES = ALL_BOOKMARKS.filter((b) => b.images && b.images.length > 0);
-    } else {
-      BOOKMARKS_WITH_IMAGES = ALL_BOOKMARKS.filter(
-        (b) => b.images && b.images.length > 0 && b.folders && b.folders.includes(folder)
-      );
-    }
-
-    state.cameraOffset.x = 0;
-    state.cameraOffset.y = 0;
-    state.targetOffset.x = 0;
-    state.targetOffset.y = 0;
-
-    for (const [visKey, entry] of activeMap) {
-      releaseElement(entry.poolEl);
-      activeMap.delete(visKey);
-    }
-
-    buildMasonryLayout();
-    renderVisibleItems();
+    setDisplayBookmarks();
+    resetViewportAndRebuild();
 
     // Animate in
     void grid.offsetHeight;
@@ -581,6 +926,30 @@ const applyFilter = (folder) => {
       isTransitioning = false;
     }, 300);
   }, 250);
+};
+
+const applyView = (view) => {
+  if (isTransitioning || view === activeView) return;
+  isTransitioning = true;
+  activeView = view;
+  updateViewToggle();
+
+  grid.style.transition = "opacity 0.2s ease";
+  grid.style.opacity = "0";
+
+  setTimeout(() => {
+    setDisplayBookmarks();
+    resetViewportAndRebuild();
+
+    void grid.offsetHeight;
+    grid.style.transition = "opacity 0.3s ease";
+    grid.style.opacity = "1";
+
+    setTimeout(() => {
+      grid.style.transition = "";
+      isTransitioning = false;
+    }, 300);
+  }, 220);
 };
 
 const createFolderPill = () => {
@@ -627,6 +996,36 @@ const updatePillLabel = () => {
   if (label) label.textContent = activeFolder;
 };
 
+const createViewToggle = () => {
+  const toggle = document.createElement("div");
+  toggle.id = "view-toggle";
+  toggle.className = "view-toggle";
+  toggle.innerHTML = `
+    <button type="button" data-view="media" class="view-toggle-btn active">Media</button>
+    <button type="button" data-view="card" class="view-toggle-btn">Cards</button>
+    <button type="button" data-view="canvas" class="view-toggle-btn">Canvas</button>
+  `;
+
+  toggle.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-view]");
+    if (!button) return;
+    applyView(button.dataset.view);
+  });
+
+  document.body.appendChild(toggle);
+};
+
+const updateViewToggle = () => {
+  document.querySelectorAll(".view-toggle-btn").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === activeView);
+  });
+};
+
+const nudgeCanvas = (direction) => {
+  if (activeView !== "canvas") return;
+  state.targetOffset.z += CONFIG.CANVAS_STEP * direction;
+};
+
 // --- Init ---
 
 const init = async () => {
@@ -641,21 +1040,24 @@ const init = async () => {
       ALL_BOOKMARKS = data.bookmarks || [];
       FOLDERS = data.folders || [];
     }
-    BOOKMARKS_WITH_IMAGES = ALL_BOOKMARKS.filter(
-      (b) => b.images && b.images.length > 0
-    );
+    setDisplayBookmarks();
     console.log(
-      `Loaded ${BOOKMARKS_WITH_IMAGES.length} bookmarks with images, ${FOLDERS.length} folders`
+      `Loaded ${ALL_BOOKMARKS.length} bookmarks, ${FOLDERS.length} folders`
     );
   } catch (e) {
     console.error("Failed to load bookmarks data:", e);
     return;
   }
 
+  CONFIG.MEDIA_COLS = window.innerWidth < 720 ? 2 : window.innerWidth < 1100 ? 3 : 5;
+  CONFIG.CARD_COLS = window.innerWidth < 720 ? 1 : window.innerWidth < 1200 ? 3 : 4;
+  CONFIG.CANVAS_COLS = window.innerWidth < 720 ? 3 : window.innerWidth < 1200 ? 4 : 5;
   buildMasonryLayout();
   createPool();
   renderVisibleItems();
   createFolderPill();
+  createViewToggle();
+  updateViewToggle();
 
   // Pre-warm Motion's animation engine so first lightbox open doesn't stutter
   const warmup = document.createElement("div");
@@ -682,6 +1084,13 @@ const init = async () => {
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.lightboxOpen) closeLightbox();
+    if (activeView === "canvas" && !state.lightboxOpen) {
+      if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") {
+        nudgeCanvas(-1);
+      } else if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") {
+        nudgeCanvas(1);
+      }
+    }
   });
 
   animate();

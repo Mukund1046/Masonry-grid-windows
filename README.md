@@ -5,7 +5,7 @@ An infinite pannable masonry grid for your Twitter/X bookmarks. Browse bookmarks
 This repo is a Windows-friendly modification of [destefanis/twitter-bookmarks-grid](https://github.com/destefanis/twitter-bookmarks-grid), with the original grid UI kept intact and the sync/export layer adapted around [@afar1](https://github.com/afar1)'s [fieldtheory-cli](https://github.com/afar1/fieldtheory-cli).
 
 ![Grid view](assets/example.png)
-![Lightbox view](assets/example-2.png)
+![Cards view](assets/example-2.png)
 
 ## What changed
 

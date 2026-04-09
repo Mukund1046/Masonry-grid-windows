@@ -1,4 +1,4 @@
-# twitter-bookmarks-grid
+# Masonry-grid-windows
 
 An infinite pannable masonry grid for your Twitter/X bookmarks. Browse bookmarks visually, open them in a lightbox, and optionally filter them by X bookmark folder.
 
@@ -31,8 +31,8 @@ The fetch/sync/export layer is Windows-friendly. The grid UI and browsing behavi
 ### 1. Clone and install
 
 ```powershell
-git clone https://github.com/destefanis/twitter-bookmarks-grid.git
-cd twitter-bookmarks-grid
+git clone https://github.com/Mukund1046/Masonry-grid-windows.git
+cd Masonry-grid-windows
 npm install
 ```
 

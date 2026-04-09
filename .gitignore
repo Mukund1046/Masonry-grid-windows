@@ -1,7 +1,11 @@
 node_modules/
+bookmarks/
 bookmarks-data.json
 folders-data.json
+output/
 .env
+.env.*
+!.env.example
 .env.local
 .DS_Store
 .claude/

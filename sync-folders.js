@@ -1,15 +1,12 @@
 #!/usr/bin/env node
 
 // Syncs Twitter bookmark folders and tags each bookmark with its folder name.
-// Uses Chrome cookies (same auth approach as fieldtheory-cli).
+// Uses explicit X session cookies from environment or .env.
 // Outputs folder data to folders-data.json
 
-const { execFileSync } = require("child_process");
-const { copyFileSync, unlinkSync, readFileSync, writeFileSync, existsSync } = require("fs");
-const { join } = require("path");
-const { tmpdir, homedir } = require("os");
-const { pbkdf2Sync, createDecipheriv, randomUUID } = require("crypto");
-const https = require("https");
+const { mkdirSync, writeFileSync } = require("fs");
+const { dirname } = require("path");
+const { getFoldersOutputPath, getRequiredEnv } = require("./config");
 
 const X_PUBLIC_BEARER =
   "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
@@ -53,71 +50,9 @@ const GRAPHQL_FEATURES = {
   responsive_web_enhance_cards_enabled: false,
 };
 
-// --- Cookie extraction ---
-
-function getChromeKey() {
-  const candidates = [
-    ["Chrome Safe Storage", "Chrome"],
-    ["Chrome Safe Storage", "Google Chrome"],
-    ["Google Chrome Safe Storage", "Chrome"],
-    ["Google Chrome Safe Storage", "Google Chrome"],
-  ];
-  for (const [service, account] of candidates) {
-    try {
-      const pw = execFileSync(
-        "security",
-        ["find-generic-password", "-w", "-s", service, "-a", account],
-        { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
-      ).trim();
-      if (pw) return pbkdf2Sync(pw, "saltysalt", 1003, 16, "sha1");
-    } catch {}
-  }
-  throw new Error("Could not read Chrome Safe Storage password from Keychain");
-}
-
 function getTwitterCookies() {
-  const chromeDir = join(homedir(), "Library/Application Support/Google/Chrome");
-  const dbPath = join(chromeDir, "Default", "Cookies");
-  const key = getChromeKey();
-
-  const tmp = join(tmpdir(), `ft-sync-${randomUUID()}.db`);
-  copyFileSync(dbPath, tmp);
-
-  let dbVersion = 0;
-  try {
-    dbVersion = parseInt(
-      execFileSync("sqlite3", [tmp, "SELECT value FROM meta WHERE key='version';"], {
-        encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-      }).trim()
-    ) || 0;
-  } catch {}
-
-  const sql = `SELECT name, hex(encrypted_value) as h, value FROM cookies WHERE host_key LIKE '%.x.com' AND name IN ('ct0','auth_token');`;
-  const raw = JSON.parse(
-    execFileSync("sqlite3", ["-json", tmp, sql], { encoding: "utf8" }).trim() || "[]"
-  );
-  unlinkSync(tmp);
-
-  const dec = new Map();
-  for (const r of raw) {
-    if (r.h && r.h.length > 0) {
-      const buf = Buffer.from(r.h, "hex");
-      if (buf[0] === 0x76 && buf[1] === 0x31 && buf[2] === 0x30) {
-        const iv = Buffer.alloc(16, 0x20);
-        const decipher = createDecipheriv("aes-128-cbc", key, iv);
-        let p = decipher.update(buf.subarray(3));
-        p = Buffer.concat([p, decipher.final()]);
-        if (dbVersion >= 24 && p.length > 32) p = p.subarray(32);
-        dec.set(r.name, p.toString("utf8").replace(/\0+$/g, "").trim());
-      }
-    } else if (r.value) {
-      dec.set(r.name, r.value);
-    }
-  }
-
-  const ct0 = dec.get("ct0");
-  const authToken = dec.get("auth_token");
-  if (!ct0) throw new Error("No ct0 cookie found — make sure you're logged into x.com in Chrome");
+  const ct0 = getRequiredEnv("X_CT0");
+  const authToken = getRequiredEnv("X_AUTH_TOKEN");
 
   return {
     csrfToken: ct0,
@@ -125,9 +60,9 @@ function getTwitterCookies() {
   };
 }
 
-// --- GraphQL fetch via curl (node https was hanging) ---
+// --- GraphQL fetch ---
 
-function fetchGraphQL(queryId, operation, variables) {
+async function fetchGraphQL(queryId, operation, variables) {
   const { csrfToken, cookieHeader } = getTwitterCookies();
 
   const params = new URLSearchParams({
@@ -136,19 +71,52 @@ function fetchGraphQL(queryId, operation, variables) {
   });
 
   const url = `https://x.com/i/api/graphql/${queryId}/${operation}?${params}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
 
-  const result = execFileSync("curl", [
-    "-s", "-S", "--max-time", "30",
-    "-H", `authorization: Bearer ${X_PUBLIC_BEARER}`,
-    "-H", `x-csrf-token: ${csrfToken}`,
-    "-H", "x-twitter-auth-type: OAuth2Session",
-    "-H", "x-twitter-active-user: yes",
-    "-H", `cookie: ${cookieHeader}`,
-    "-H", "user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-    url,
-  ], { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 });
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${X_PUBLIC_BEARER}`,
+        "x-csrf-token": csrfToken,
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-active-user": "yes",
+        cookie: cookieHeader,
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+        accept: "*/*",
+        "accept-language": "en-US,en;q=0.9",
+        referer: "https://x.com/i/bookmarks",
+      },
+      signal: controller.signal,
+    });
 
-  return JSON.parse(result);
+    const body = await response.text();
+    if (!body.trim()) {
+      throw new Error(`X returned an empty response for ${operation} (${response.status})`);
+    }
+
+    if (!response.ok) {
+      const hint =
+        response.status === 401 || response.status === 403
+          ? " Verify that X_CT0 is the shorter csrf token, X_AUTH_TOKEN is the longer auth cookie, and both were copied fresh from x.com."
+          : "";
+      throw new Error(
+        `X returned ${response.status} ${response.statusText} for ${operation}: ${body.slice(0, 300)}${hint}`
+      );
+    }
+
+    try {
+      return JSON.parse(body);
+    } catch {
+      throw new Error(
+        `X returned non-JSON for ${operation}: ${body.slice(0, 300)}`
+      );
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // --- Parse tweet from GraphQL response ---
@@ -276,7 +244,7 @@ async function main() {
   console.log("Fetching bookmark folders...\n");
 
   // 1. Get folder list
-  const foldersJson = fetchGraphQL("i78YDd0Tza-dV4SYs58kRg", "BookmarkFoldersSlice", {});
+  const foldersJson = await fetchGraphQL("i78YDd0Tza-dV4SYs58kRg", "BookmarkFoldersSlice", {});
   const folderItems = foldersJson?.data?.viewer?.user_results?.result?.bookmark_collections_slice?.items ?? [];
 
   const folders = folderItems.map((f) => ({ id: f.id, name: f.name }));
@@ -302,7 +270,8 @@ async function main() {
     folderMap, // tweetId → [folderName, ...]
   };
 
-  const outPath = join(__dirname, "folders-data.json");
+  const outPath = getFoldersOutputPath();
+  mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, JSON.stringify(output, null, 2));
 
   const taggedCount = Object.keys(folderMap).length;
@@ -310,4 +279,7 @@ async function main() {
   console.log(`Saved to ${outPath}`);
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error(`Error: ${error.message}`);
+  process.exitCode = 1;
+});

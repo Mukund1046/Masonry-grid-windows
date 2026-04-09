@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "sync:folders": "node sync-folders.js",
+    "export:bookmarks": "node export-bookmarks.js",
     "start": "node server.js"
   },
   "keywords": [],
@@ -11,6 +12,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "fieldtheory": "^1.3.3",
     "motion": "^12.38.0"
   }
 }

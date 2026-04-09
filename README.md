@@ -52,11 +52,9 @@ Do not use:
 ft sync
 ```
 
-Use one of these instead:
+Use this instead:
 
 ```powershell
-fieldtheory sync
-fieldtheory.exe sync
 & "C:\Users\YOUR_NAME\AppData\Roaming\npm\ft.cmd" sync
 ```
 

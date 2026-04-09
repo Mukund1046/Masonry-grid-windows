@@ -1,4 +1,4 @@
-# Masonry-grid-windows
+# Windows X/Twitter Bookmarks Viewer (Media, Cards, Canvas)
 
 An infinite pannable masonry grid for your Twitter/X bookmarks. Browse bookmarks visually, open them in a lightbox, and optionally filter them by X bookmark folder.
 
